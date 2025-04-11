@@ -1,2 +1,4 @@
 tests/*
 lib/*.so
+/.idea
+/lib

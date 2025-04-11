@@ -20,6 +20,7 @@ static int num_coalesces     = 0;
 static int num_blocks        = 0;
 static int num_requested     = 0;
 static int max_heap          = 0;
+static int current_heap_size = 0;
 
 /*
  *  \brief printStatistics
@@ -56,6 +57,8 @@ struct _block
 
 struct _block *heapList = NULL; /* Free list to track the _blocks available */
 
+
+
 /*
  * \brief findFreeBlock
  *
@@ -91,17 +94,99 @@ struct _block *findFreeBlock(struct _block **last, size_t size)
 
 // \TODO Put your Best Fit code in this #ifdef block
 #if defined BEST && BEST == 0
-   /** \TODO Implement best fit here */
+   ///** \TODO Implement best fit here **/
+    struct _block *best = NULL;
+    struct _block *prev_best = NULL;  // To track the previous block 
+   
+    while (curr != NULL) 
+    {
+        // First, let's check if the block is free and large enough to fit
+        if (curr->free && curr->size >= size) 
+        {
+            // If no best block has been found yet, 
+            // or the current block is the smallest fitting block
+            if (!best || curr->size < best->size) 
+            {
+                best = curr;   // Update the best fit block
+                prev_best = *last;  // Update the previous block to current last block
+            }
+        }
+
+        *last = curr;   
+        curr = curr->next;  // Move to the next block
+    }
+
 #endif
 
 // \TODO Put your Worst Fit code in this #ifdef block
 #if defined WORST && WORST == 0
    /** \TODO Implement worst fit here */
+    struct _block *worst = NULL;
+    struct _block *prev_worst = NULL;
+   
+    while (curr != NULL) 
+    {
+        //  check if the block is free and big enough 
+        if (curr->free && curr->size >= size) 
+        {
+            // If no worst block has been found yet, 
+            // or the current block is the largest fitting block
+            if (!worst || curr->size > worst->size) 
+            {
+                worst = curr;   // Update the worst fit block
+                prev_worst = *last;  
+            }
+        }
+
+        *last = curr;          
+        curr = curr->next; 
+    }
 #endif
 
-// \TODO Put your Next Fit code in this #ifdef block
+// TODO Put your Next Fit code in this #ifdef block
 #if defined NEXT && NEXT == 0
    /** \TODO Implement next fit here */
+   struct _block *last_allocated = NULL;
+   // Check if we need to start from the beginning of the heap
+   // we need to start from the beginning if nothing has been allocated yet
+
+   if (!last_allocated) 
+   {
+      last_allocated = heapList; 
+   }
+
+   struct _block *start = last_allocated; 
+   
+   // if somethin is allocated,
+   // loop through the blocks starting from last_allocated
+   do 
+   {
+      // if the block is free 
+      // and large enough to fit the size
+      if (last_allocated->free && last_allocated->size >= size) 
+      {
+         curr = last_allocated; // We've found a block that fits
+         break; // so we don't need to keep searching
+      }
+
+      // Move last_allocated to the next block
+      *last = last_allocated; 
+
+      // If we reach the end of the list, 
+      // go back to the start 
+      // do the loop again and again until we find a fit
+      if (last_allocated->next) 
+      {
+         last_allocated = last_allocated->next;
+      } else 
+      {
+         last_allocated = heapList;
+      }
+
+    } 
+    // Continue looping until we come back to the starting point
+    while (last_allocated != start); 
+
 #endif
 
    return curr;
@@ -151,7 +236,9 @@ struct _block *growHeap(struct _block *last, size_t size)
    */
    curr->size = size;
    curr->next = NULL;
-   curr->free = false;
+   curr->free = false;\
+
+   current_heap_size += size + sizeof(struct _block);
    return curr;
 }
 
@@ -169,7 +256,7 @@ struct _block *growHeap(struct _block *last, size_t size)
  */
 void *malloc(size_t size) 
 {
-
+	printf("abc");
    if( atexit_registered == 0 )
    {
       atexit_registered = 1;
@@ -196,12 +283,53 @@ void *malloc(size_t size)
             If the leftover space in the new block is less than the sizeof(_block)+4 then
             don't split the block.
    */
+   
+   // Track the total requested memory size
+    num_requested += size;
+
+    /* If the free block found by findFreeBlock */
+    if (next != NULL) 
+    {
+        num_reuses++;  
+        
+      // if the block is larger than the sizeof(_block)+4 
+      // then split the block. 
+      if (next->size >= size + sizeof(struct _block) + 4) 
+      {
+         // allocated and free
+         // size of the remaining free space after allocating 'size'
+         struct _block *new_block = (struct _block *)((char *)next + size + sizeof(struct _block));
+         
+         new_block->size = next->size - size - sizeof(struct _block);  // left space
+         new_block->free = true;  // then new block will be free
+         new_block->next = next->next;  // link to the next block (same as next's next)
+         
+         // adjusting the size of the allocated block
+         next->size = size;  
+         next->next = new_block; 
+         
+         num_splits++;
+      }
+
+      // the block is in use
+      next->free = false;
+      num_mallocs++;
+      
+      return BLOCK_DATA(next);
+   }
 
    /* Could not find free _block, so grow heap */
    if (next == NULL) 
    {
       next = growHeap(last, size);
+      num_grows++; 
    }
+   
+    // Update max_heap if current_heap_size exceeds max_heap
+    if (current_heap_size > max_heap)
+    {
+        max_heap = current_heap_size;
+    }
 
    /* Could not find free _block or grow heap, so just return NULL */
    if (next == NULL) 
@@ -211,6 +339,7 @@ void *malloc(size_t size)
    
    /* Mark _block as in use */
    next->free = false;
+   num_blocks++;
 
    /* Return data address associated with _block to the user */
    return BLOCK_DATA(next);
@@ -241,18 +370,107 @@ void free(void *ptr)
    /* TODO: Coalesce free _blocks.  If the next block or previous block 
             are free then combine them with this block being freed.
    */
+   
+   if (curr->next && curr->next->free) 
+   {
+       // combine with the next block
+       // and then skip over the next block
+      curr->size = curr->size + sizeof(struct _block) + curr->next->size;
+      curr->next = curr->next->next;
+      
+      num_coalesces++;  // Increment coalesce counter
+   }
+
+   // Combine with the previous block if it's free
+   // amking sure we're not looking for the previous block 
+   // when we're at the first block
+   if (curr != heapList)
+   {
+      struct _block *previous = heapList;
+      while (previous && previous->next != curr) 
+      {
+         // Find the previous block by traversing the list
+         previous = previous->next;
+      }
+      
+      if (previous && previous->free) 
+      {
+         // Combine with the previous block and skip over the current block
+         previous->size = previous->size + sizeof(struct _block) + curr->size;
+         previous->next = curr->next;
+
+         num_coalesces++;  // Increment coalesce counter for merging with the previous block
+      }
+   }
+   
+   num_blocks--;  // Since we've freed a block
+
+   num_frees++;  // Increment free counter
+    
+   return;
+
 }
 
 void *calloc( size_t nmemb, size_t size )
 {
    // \TODO Implement calloc
-   return NULL;
+   // the total size required
+    size_t T_size = nmemb * size;
+
+    // Use malloc to allocate memory
+    void *ptr = malloc(T_size);
+
+    // If malloc fails, return NULL
+    if (ptr == NULL) 
+    {
+        return NULL;
+    }
+
+    // Zero out the allocated memory
+    memset(ptr, 0, T_size);
+    
+    return ptr;
 }
 
 void *realloc( void *ptr, size_t size )
 {
    // \TODO Implement realloc
-   return NULL;
+   // If ptr == NULL, using realloc as malloc
+    if (ptr == NULL) 
+    {
+        return malloc(size);
+    }
+
+    // If size == 0, use realloc as free
+    if (size == 0) 
+    {
+        free(ptr);
+        return NULL;
+    }
+
+    // get the block header for the current block
+    struct _block *current_block = BLOCK_HEADER(ptr);
+
+    // if the new size is smaller, return same pointer
+    if (current_block->size >= size) 
+    {
+        return ptr;
+    }
+
+    // allocate new memory of the requested size
+    void *new_ptr = malloc(size);
+    if (new_ptr == NULL) 
+    {
+        return NULL;
+    }
+
+    // Copy old data into the new memory
+    memcpy(new_ptr, ptr, current_block->size);
+
+    // Free the old block
+    free(ptr);
+
+    return new_ptr;
 }
 
 
